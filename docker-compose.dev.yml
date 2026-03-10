@@ -1,0 +1,78 @@
+services:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # KAFKA (DEV OVERRIDES)
+  # ────────────────────────────────────────────────────────────────────────────
+  kafka:
+    healthcheck:
+      test: [ "CMD-SHELL", "bash -lc 'timeout 2 bash -c \"echo > /dev/tcp/127.0.0.1/9092\"'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # SPARK MASTER (DEV OVERRIDES)
+  # ────────────────────────────────────────────────────────────────────────────
+  spark-master:
+    ports:
+      - "7077:7077"
+      - "8082:8080"
+    environment:
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    healthcheck:
+      test: [ "CMD-SHELL", "bash -lc 'timeout 2 bash -c \"echo > /dev/tcp/127.0.0.1/8080\"'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # SPARK WORKER (DEV OVERRIDES)
+  # ────────────────────────────────────────────────────────────────────────────
+  spark-worker:
+    environment:
+      SPARK_WORKER_MEMORY: "${SPARK_WORKER_MEMORY}"
+      SPARK_WORKER_CORES: "${SPARK_WORKER_CORES}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    ports:
+      - "8081:8081"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # SPARK HISTORY SERVER (DEV OVERRIDES)
+  # ────────────────────────────────────────────────────────────────────────────
+  spark-history:
+    ports:
+      - "18080:18080"
+    environment:
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # SPARK BRONZE (DEV OVERRIDES)
+  # ────────────────────────────────────────────────────────────────────────────
+  spark-bronze:
+    environment:
+      TOPIC: "${TOPIC}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # SPARK SILVER (DEV OVERRIDES)
+  # ────────────────────────────────────────────────────────────────────────────
+  spark-silver:
+    environment:
+      TOPIC: "${TOPIC}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # SPARK GOLD (DEV OVERRIDES)
+  # ────────────────────────────────────────────────────────────────────────────
+  spark-gold:
+    environment:
+      TOPIC: "${TOPIC}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp

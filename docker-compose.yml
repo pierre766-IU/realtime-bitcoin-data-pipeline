@@ -1,0 +1,205 @@
+name: docker
+
+x-spark-app-image: &spark_app_image
+  build:
+    context: ./src/streaming
+  image: bitcoin/spark-apps:latest
+
+x-spark-submit-base: &spark_submit_base
+  command: >
+    /opt/spark/bin/spark-submit --master spark://spark-master:7077 --executor-memory 512m --driver-memory 512m --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,io.delta:delta-spark_2.12:3.2.0 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=/opt/spark/events
+  volumes:
+    - ./src/streaming:/opt/spark-apps
+    - ./delta:/data/delta
+    - ./spark-events:/opt/spark/events
+  depends_on:
+    kafka:
+      condition: service_started
+    spark-master:
+      condition: service_started
+  networks: [ app-net ]
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    hostname: kafka
+    depends_on:
+      zookeeper:
+        condition: service_started
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      # Internal listener for all Docker containers
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:${HOST_KAFKA_PORT}
+
+      # Advertised listeners:
+      # - internal: kafka:9092
+      # - external: ${HOST_ADVERTISED}:${HOST_KAFKA_PORT}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://${HOST_ADVERTISED}:${HOST_KAFKA_PORT}
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "${KAFKA_AUTO_CREATE_TOPICS_ENABLE}"
+
+    ports:
+      - "${HOST_KAFKA_PORT}:${HOST_KAFKA_PORT}"
+
+    healthcheck:
+      test: [ "CMD-SHELL", "bash -lc 'timeout 2 bash -c \"echo > /dev/tcp/127.0.0.1/9092\"'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  spark-master:
+    image: apache/spark:3.5.7
+    hostname: spark-master
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master --port 7077 --webui-port 8080
+    ports:
+      - "7077:7077"
+      - "8082:8080"
+    volumes:
+      - ./src/streaming:/opt/spark-apps
+      - ./delta:/data/delta
+      - ./spark-events:/opt/spark/events
+    environment:
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    healthcheck:
+      test: [ "CMD-SHELL", "bash -lc 'timeout 2 bash -c \"echo > /dev/tcp/127.0.0.1/8080\"'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  spark-worker:
+    image: apache/spark:3.5.7
+    depends_on:
+      spark-master:
+        condition: service_started
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      SPARK_WORKER_MEMORY: "${SPARK_WORKER_MEMORY}"
+      SPARK_WORKER_CORES: "${SPARK_WORKER_CORES}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./src/streaming:/opt/spark-apps
+      - ./delta:/data/delta
+      - ./spark-events:/opt/spark/events
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  spark-history:
+    image: apache/spark:3.5.7
+    depends_on:
+      spark-master:
+        condition: service_started
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
+    environment:
+      SPARK_HISTORY_OPTS: "-Dspark.history.fs.logDirectory=/opt/spark/events"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    ports:
+      - "18080:18080"
+    volumes:
+      - ./spark-events:/opt/spark/events
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  producer-random:
+    build:
+      context: ./src/producer
+    environment:
+      BOOTSTRAP: kafka:9092
+      TOPIC: "${TOPIC}"
+    depends_on:
+      kafka:
+        condition: service_started
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  producer-replay:
+    build:
+      context: ./src/producer
+    environment:
+      BOOTSTRAP: kafka:9092
+      TOPIC: "${TOPIC}"
+      REPLAY_SPEED: "${REPLAY_SPEED}"
+    depends_on:
+      kafka:
+        condition: service_started
+    command: >
+      python replay_producer.py
+    networks: [ app-net ]
+    restart: "no"
+
+  spark-bronze:
+    <<: [ *spark_app_image, *spark_submit_base ]
+    environment:
+      TOPIC: "${TOPIC}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    command: >
+      /opt/spark/bin/spark-submit --master spark://spark-master:7077 --total-executor-cores 1 --executor-memory 512m --driver-memory 512m --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,io.delta:delta-spark_2.12:3.2.0 --conf spark.jars.ivy=/tmp/.ivy2 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=/opt/spark/events /opt/spark-apps/bronze_ingest.py
+    networks: [ app-net ]
+    restart: "no"
+
+  spark-silver:
+    <<: [ *spark_app_image, *spark_submit_base ]
+    environment:
+      TOPIC: "${TOPIC}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    command: >
+      /opt/spark/bin/spark-submit --master spark://spark-master:7077 --total-executor-cores 1 --executor-memory 512m --driver-memory 512m --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,io.delta:delta-spark_2.12:3.2.0 --conf spark.jars.ivy=/tmp/.ivy2 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=/opt/spark/events /opt/spark-apps/silver_transform.py
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  spark-gold:
+    <<: [ *spark_app_image, *spark_submit_base ]
+    environment:
+      TOPIC: "${TOPIC}"
+      IVY_HOME: /tmp/.ivy2
+      HOME: /tmp
+    command: >
+      /opt/spark/bin/spark-submit --master spark://spark-master:7077 --total-executor-cores 1 --executor-memory 512m --driver-memory 512m --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,io.delta:delta-spark_2.12:3.2.0 --conf spark.jars.ivy=/tmp/.ivy2 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.eventLog.enabled=true --conf spark.eventLog.dir=/opt/spark/events /opt/spark-apps/gold_agg.py
+    networks: [ app-net ]
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./src/dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./delta:/data/delta
+    networks: [ app-net ]
+    restart: unless-stopped
+
+networks:
+  app-net:
+    driver: bridge
+
