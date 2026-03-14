@@ -1,0 +1,140 @@
+bundle:
+  name: bitcoin-streaming-pipeline
+
+sync:
+  include:
+    - src/**
+
+auth:
+  type: pat
+
+variables:
+  databricks_host:
+    description: Databricks workspace URL, for example https://adb-1234567890123456.7.azuredatabricks.net
+  event_hubs_bootstrap:
+    description: Event Hubs Kafka bootstrap endpoint <namespace>.servicebus.windows.net:9093
+    default: my-namespace.servicebus.windows.net:9093
+  event_hubs_topic:
+    description: Event Hubs topic (hub) name
+    default: bitcoin-stream
+  delta_base_path:
+    description: ADLS path for Delta tables
+    default: abfss://delta@mydatalake.dfs.core.windows.net/bitcoin
+  checkpoint_base_path:
+    description: ADLS path for Structured Streaming checkpoints
+    default: abfss://checkpoints@mydatalake.dfs.core.windows.net/bitcoin
+  spark_version:
+    description: Databricks runtime
+    default: 13.3.x-scala2.12
+  node_type_id:
+    description: Databricks worker node size
+    default: Standard_DS3_v2
+  num_workers:
+    description: Number of workers for each streaming job cluster
+    default: "1"
+
+resources:
+  jobs:
+    bronze_stream:
+      name: btc-bronze-${bundle.target}
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: bronze_task
+          spark_python_task:
+            python_file: src/streaming/bronze_ingest.py
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.num_workers}
+            spark_env_vars:
+              BOOTSTRAP: ${var.event_hubs_bootstrap}
+              TOPIC: ${var.event_hubs_topic}
+              DELTA_BASE_PATH: ${var.delta_base_path}
+              CHECKPOINT_BASE_PATH: ${var.checkpoint_base_path}
+      tags:
+        layer: bronze
+        system: bitcoin-streaming-pipeline
+
+    silver_stream:
+      name: btc-silver-${bundle.target}
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: silver_task
+          spark_python_task:
+            python_file: src/streaming/silver_transform.py
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.num_workers}
+            spark_env_vars:
+              DELTA_BASE_PATH: ${var.delta_base_path}
+              CHECKPOINT_BASE_PATH: ${var.checkpoint_base_path}
+      tags:
+        layer: silver
+        system: bitcoin-streaming-pipeline
+
+    gold_stream:
+      name: btc-gold-${bundle.target}
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: gold_task
+          spark_python_task:
+            python_file: src/streaming/gold_agg.py
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.num_workers}
+            spark_env_vars:
+              DELTA_BASE_PATH: ${var.delta_base_path}
+              CHECKPOINT_BASE_PATH: ${var.checkpoint_base_path}
+      tags:
+        layer: gold
+        system: bitcoin-streaming-pipeline
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      host: ${var.databricks_host}
+      root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
+    variables:
+      databricks_host: https://adb-7405611424404070.10.azuredatabricks.net
+      event_hubs_bootstrap: btcpipelinedevehns.servicebus.windows.net:9093
+      event_hubs_topic: bitcoin-stream
+      delta_base_path: abfss://delta@btcpipelinedevdls.dfs.core.windows.net/bitcoin
+      checkpoint_base_path: abfss://checkpoints@btcpipelinedevdls.dfs.core.windows.net/bitcoin
+      spark_version: 13.3.x-scala2.12
+      node_type_id: Standard_DS3_v2
+      num_workers: "1"
+
+  stage:
+    mode: production
+    workspace:
+      host: ${var.databricks_host}
+      root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
+    variables:
+      databricks_host: https://adb-REPLACE-STAGE.azuredatabricks.net
+      event_hubs_bootstrap: REPLACE-STAGE.servicebus.windows.net:9093
+      event_hubs_topic: bitcoin-stream
+      delta_base_path: abfss://delta@REPLACESTAGE.dfs.core.windows.net/bitcoin
+      checkpoint_base_path: abfss://checkpoints@REPLACESTAGE.dfs.core.windows.net/bitcoin
+      spark_version: 13.3.x-scala2.12
+      node_type_id: Standard_DS4_v2
+      num_workers: "2"
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.databricks_host}
+      root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
+    variables:
+      databricks_host: https://adb-REPLACE-PROD.azuredatabricks.net
+      event_hubs_bootstrap: REPLACE-PROD.servicebus.windows.net:9093
+      event_hubs_topic: bitcoin-stream
+      delta_base_path: abfss://delta@REPLACEPROD.dfs.core.windows.net/bitcoin
+      checkpoint_base_path: abfss://checkpoints@REPLACEPROD.dfs.core.windows.net/bitcoin
+      spark_version: 13.3.x-scala2.12
+      node_type_id: Standard_DS4_v2
+      num_workers: "3"
+

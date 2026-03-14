@@ -1,0 +1,4 @@
+resource_group_name  = "rg-tfstate"
+storage_account_name = "sttfstate00001"
+container_name       = "tfstate"
+key                  = "bitcoin-streaming-pipeline/stage.tfstate"

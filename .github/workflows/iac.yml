@@ -1,0 +1,166 @@
+name: iac-terraform-cloud
+
+on:
+  pull_request:
+    branches: ["main", "master"]
+    paths:
+      - "infra/**"
+      - ".github/workflows/iac.yml"
+      - ".github/actions/sync-keyvault-secrets/**"
+
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "infra/**"
+      - ".github/workflows/iac.yml"
+      - ".github/actions/sync-keyvault-secrets/**"
+
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Cloud environment to deploy (local is on-prem and not deployed here)"
+        required: true
+        default: "stage"
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env_name: [dev, stage, prod]
+    defaults:
+      run:
+        working-directory: infra/envs/${{ matrix.env_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive ../../
+
+      - name: Terraform init (no backend)
+        run: terraform init -input=false -backend=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+  apply-cloud-dev:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: dev
+    defaults:
+      run:
+        working-directory: infra/envs/dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Terraform init
+        shell: bash
+        run: |
+          if [[ -n "${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" ]]; then
+            terraform init -input=false \
+              -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
+              -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
+              -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
+              -backend-config="key=${{ vars.TFSTATE_KEY }}"
+          else
+            terraform init -input=false
+          fi
+
+      - name: Terraform plan
+        run: terraform plan -input=false -var-file=terraform.tfvars -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Read Terraform outputs
+        id: tf_outputs
+        shell: bash
+        run: |
+          echo "key_vault_name=$(terraform output -raw key_vault_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync GitHub environment secrets to Key Vault
+        if: ${{ success() && (secrets.DATABRICKS_HOST != '' || secrets.DATABRICKS_TOKEN != '' || secrets.KEYVAULT_SECRETS_JSON != '') }}
+        uses: ./.github/actions/sync-keyvault-secrets
+        with:
+          key_vault_name: ${{ steps.tf_outputs.outputs.key_vault_name }}
+          databricks_host_value: ${{ secrets.DATABRICKS_HOST }}
+          databricks_token_value: ${{ secrets.DATABRICKS_TOKEN }}
+          extra_secrets_json: ${{ secrets.KEYVAULT_SECRETS_JSON }}
+
+  apply-manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_env }}
+    defaults:
+      run:
+        working-directory: infra/envs/${{ inputs.target_env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Terraform init
+        shell: bash
+        run: |
+          if [[ -n "${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" ]]; then
+            terraform init -input=false \
+              -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
+              -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
+              -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
+              -backend-config="key=${{ vars.TFSTATE_KEY }}"
+          else
+            terraform init -input=false
+          fi
+
+      - name: Terraform plan
+        run: terraform plan -input=false -var-file=terraform.tfvars -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Read Terraform outputs
+        id: tf_outputs
+        shell: bash
+        run: |
+          echo "key_vault_name=$(terraform output -raw key_vault_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync GitHub environment secrets to Key Vault
+        if: ${{ success() && (secrets.DATABRICKS_HOST != '' || secrets.DATABRICKS_TOKEN != '' || secrets.KEYVAULT_SECRETS_JSON != '') }}
+        uses: ./.github/actions/sync-keyvault-secrets
+        with:
+          key_vault_name: ${{ steps.tf_outputs.outputs.key_vault_name }}
+          databricks_host_value: ${{ secrets.DATABRICKS_HOST }}
+          databricks_token_value: ${{ secrets.DATABRICKS_TOKEN }}
+          extra_secrets_json: ${{ secrets.KEYVAULT_SECRETS_JSON }}

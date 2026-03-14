@@ -32,8 +32,8 @@ The local development environment includes:
 - Delta Lake storage mounted locally
 
 This setup is **for local development only**.
-A production-ready Azure architecture (AKS, ACR, ADLS, Event Hubs) will be finalized later (Phase 3).
-A CI workflow file (`ci.yml`) is already included to prepare for automated testing and image builds.
+A production‑ready cloud baseline is included, targeting a Databricks‑first deployment on Azure using GHCR, ADLS, Event Hubs, Key Vault, Azure Monitor, and a Databricks Workspace.
+CI workflows are included for separate IaC and application lanes (`iac.yml` and `app-databricks.yml`) to support automated validation and deployment.
 Full CI/CD integration will be implemented in the production phase when deploying to Azure.
 
 Environment files follow a production-ready pattern.
@@ -42,7 +42,17 @@ This avoids conflicts with future CI/CD and Terraform-managed production variabl
 
 ---
 
-## Architecture (DEV Environment)
+## Environment Naming Model
+
+- `local`: on-prem Docker Compose development and debugging on your machine
+- `dev` (cloud): first Azure environment for integration deployment and validation
+- `stage` (cloud): pre-production validation and release checks
+- `prod` (cloud): production workload
+
+Note: `local` is not deployed through Terraform/GitHub cloud deployment workflows.
+
+---
+## Architecture (Local / On-Prem)
 
 - **Zookeeper** -> Kafka metadata (single-broker dev mode)
 - **Kafka** -> topic: `bitcoin-stream`
@@ -65,7 +75,7 @@ UIs and endpoints:
 
 ---
 
-## Prerequisites
+## Prerequisites (Local/On-prem)
 
 - Docker Desktop / Engine + Compose v2
 - Approximately 6-8 GB RAM available to Docker recommended (project may fail on systems with only 8 GB total RAM)
@@ -132,7 +142,7 @@ Once the jobs are running, view real-time analytics at:
 
 ---
 
-## Local Development Environment (DEV)
+## Local Development Environment (local / on-prem)
 
 This project uses a two-file Docker Compose setup:
 
@@ -223,5 +233,67 @@ bitcoin-streaming-pipeline/
 |
 `-- .github/
     `-- workflows/
-        `-- ci.yml                      # CI: lint, test, build Docker images
+        |-- iac.yml                     # IaC lane: terraform validate/deploy
+        `-- app-databricks.yml          # App lane: lint/build + Databricks deploy
 ```
+
+---
+
+## Production Baseline (Azure + Databricks)
+
+This repository now includes a cloud production IaC and deployment scaffold aligned to `architecture-v2.md`.
+
+### Added Structure
+
+- `infra/modules/*`: reusable Terraform modules (`eventhub`, `adls`, `keyvault`, `monitoring`, `databricks_workspace`)
+- `infra/envs/dev|stage|prod`: separate cloud Terraform roots for explicit environment promotion
+- `databricks.yml`: Databricks Asset Bundle for Bronze/Silver/Gold streaming jobs
+- `.github/workflows/iac.yml`: IaC lane (validate + deploy)
+- `.github/workflows/app-databricks.yml`: app lane (lint/build + Databricks bundle deploy)
+
+### Environment Promotion Model
+
+- `dev` (cloud): auto-apply for infra on push to `main` when `infra/**` changes; auto app deploy on push to `main` when `src/**` changes
+- `stage` and `prod` (cloud): manual deploy via workflow dispatch with GitHub Environment approvals
+
+### Required GitHub Environment Configuration
+
+Create cloud environments: `dev`, `stage`, `prod`.
+
+For each environment, add secrets:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `TFSTATE_RESOURCE_GROUP`
+- `TFSTATE_STORAGE_ACCOUNT`
+- `TFSTATE_CONTAINER`
+- `DATABRICKS_HOST`
+- `DATABRICKS_TOKEN`
+- `KEYVAULT_SECRETS_JSON` (optional JSON object of extra Key Vault secrets)
+
+For each environment, add variables:
+
+- `TFSTATE_KEY` (example: `bitcoin-streaming-pipeline/dev.tfstate`)
+- `KEYVAULT_DATABRICKS_HOST_SECRET_NAME` (optional, defaults to `databricks-host`)
+- `KEYVAULT_DATABRICKS_TOKEN_SECRET_NAME` (optional, defaults to `databricks-token`)
+
+### Notes
+
+- Replace placeholder values in `databricks.yml` target variables before deployment.
+- Keep `infra/envs/*/backend.hcl` local only (ignored by `.gitignore`).
+- Infra deploys now sync GitHub environment secrets into the provisioned Key Vault after Terraform apply, so runtime secret values stay out of Terraform state.
+- App deploys publish the Spark, producer, and dashboard container images into GitHub Container Registry before the Databricks bundle deploy runs.
+- GHCR publishing is independent from Terraform state, so the app lane can publish images without a prior registry bootstrap step.
+- Use private networking, managed identities, and RBAC policies as part of environment hardening before go-live.
+
+
+
+
+
+
+
+
+
+
+

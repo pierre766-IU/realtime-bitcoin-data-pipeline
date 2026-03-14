@@ -44,3 +44,20 @@ node_modules/
 .tox/
 .coverage
 htmlcov/
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+infra/envs/*/backend.hcl
+
+# Databricks bundle local files
+.databricks/
+.terraformrc
+

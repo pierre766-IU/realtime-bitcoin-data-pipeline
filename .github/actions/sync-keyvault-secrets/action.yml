@@ -1,0 +1,111 @@
+name: Sync Key Vault Secrets
+description: Sync selected GitHub environment secrets into an Azure Key Vault.
+
+inputs:
+  key_vault_name:
+    description: Name of the Azure Key Vault to update.
+    required: true
+  databricks_host_value:
+    description: Databricks host value to store.
+    required: false
+    default: ""
+  databricks_token_value:
+    description: Databricks token value to store.
+    required: false
+    default: ""
+  databricks_host_secret_name:
+    description: Key Vault secret name for the Databricks host.
+    required: false
+    default: databricks-host
+  databricks_token_secret_name:
+    description: Key Vault secret name for the Databricks token.
+    required: false
+    default: databricks-token
+  extra_secrets_json:
+    description: Optional JSON object of additional secret-name to secret-value pairs.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Sync secrets
+      shell: bash
+      env:
+        KEY_VAULT_NAME: ${{ inputs.key_vault_name }}
+        DATABRICKS_HOST_VALUE: ${{ inputs.databricks_host_value }}
+        DATABRICKS_TOKEN_VALUE: ${{ inputs.databricks_token_value }}
+        DATABRICKS_HOST_SECRET_NAME: ${{ inputs.databricks_host_secret_name }}
+        DATABRICKS_TOKEN_SECRET_NAME: ${{ inputs.databricks_token_secret_name }}
+        EXTRA_SECRETS_JSON: ${{ inputs.extra_secrets_json }}
+      run: |
+        set -euo pipefail
+
+        sync_secret() {
+          local secret_name="$1"
+          local secret_value="$2"
+
+          if [[ -z "$secret_value" ]]; then
+            return 0
+          fi
+
+          echo "::add-mask::$secret_value"
+
+          for attempt in 1 2 3 4 5; do
+            if az keyvault secret set \
+              --vault-name "$KEY_VAULT_NAME" \
+              --name "$secret_name" \
+              --value "$secret_value" \
+              --only-show-errors \
+              --output none; then
+              echo "Synced secret '$secret_name' to Key Vault."
+              return 0
+            fi
+
+            if [[ "$attempt" -eq 5 ]]; then
+              echo "Failed to sync secret '$secret_name' after retries." >&2
+              return 1
+            fi
+
+            sleep 15
+          done
+        }
+
+        sync_secret "$DATABRICKS_HOST_SECRET_NAME" "$DATABRICKS_HOST_VALUE"
+        sync_secret "$DATABRICKS_TOKEN_SECRET_NAME" "$DATABRICKS_TOKEN_VALUE"
+
+        if [[ -n "${EXTRA_SECRETS_JSON:-}" ]]; then
+          python3 - <<'PY'
+import json
+import os
+import subprocess
+import time
+
+vault_name = os.environ["KEY_VAULT_NAME"]
+payload = json.loads(os.environ["EXTRA_SECRETS_JSON"])
+
+if not isinstance(payload, dict):
+    raise SystemExit("extra_secrets_json must be a JSON object of secret-name -> secret-value.")
+
+for name, value in payload.items():
+    if not isinstance(name, str) or not isinstance(value, str):
+        raise SystemExit("extra_secrets_json keys and values must be strings.")
+
+    print(f"::add-mask::{value}")
+
+    for attempt in range(1, 6):
+        result = subprocess.run([
+            "az", "keyvault", "secret", "set",
+            "--vault-name", vault_name,
+            "--name", name,
+            "--value", value,
+            "--only-show-errors",
+            "--output", "none",
+        ])
+        if result.returncode == 0:
+            print(f"Synced secret '{name}' to Key Vault.")
+            break
+        if attempt == 5:
+            raise SystemExit(f"Failed to sync secret '{name}' after retries.")
+        time.sleep(15)
+PY

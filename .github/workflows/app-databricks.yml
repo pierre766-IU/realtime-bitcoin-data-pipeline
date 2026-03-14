@@ -1,0 +1,241 @@
+name: app-databricks-cloud
+
+on:
+  pull_request:
+    branches: ["main", "master"]
+    paths:
+      - "src/**"
+      - "databricks.yml"
+      - "requirements-ci.txt"
+      - "docker-compose.yml"
+      - "docker-compose.dev.yml"
+      - ".github/workflows/app-databricks.yml"
+
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "src/**"
+      - "databricks.yml"
+      - "requirements-ci.txt"
+      - "docker-compose.yml"
+      - "docker-compose.dev.yml"
+      - ".github/workflows/app-databricks.yml"
+
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Cloud environment to deploy Databricks bundle (local is on-prem and not deployed here)"
+        required: true
+        default: "stage"
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  quality-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install lint and test tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Ruff lint
+        run: ruff check src
+
+      - name: Run pytest if tests exist
+        run: |
+          if compgen -G "tests/test_*.py" > /dev/null; then
+            pytest -q
+          else
+            echo "No tests"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Spark image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/streaming
+          file: ./src/streaming/Dockerfile
+          tags: bitcoin/spark-apps:${{ github.sha }}
+          push: false
+
+      - name: Build Producer image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/producer
+          file: ./src/producer/Dockerfile
+          tags: bitcoin/producer:${{ github.sha }}
+          push: false
+
+      - name: Build Dashboard image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/dashboard
+          file: ./src/dashboard/Dockerfile
+          tags: bitcoin/dashboard:${{ github.sha }}
+          push: false
+
+      - name: Validate compose files
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env config
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml config
+
+  bundle-validate:
+    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && secrets.DATABRICKS_HOST != '' && secrets.DATABRICKS_TOKEN != '' }}
+    needs: quality-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: databricks/setup-cli@main
+
+      - name: Validate Databricks bundle
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: databricks bundle validate -t dev
+
+  deploy-cloud-dev:
+    if: github.event_name == 'push'
+    needs: quality-build
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute GHCR image names
+        id: ghcr
+        shell: bash
+        run: |
+          owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "base=ghcr.io/${owner_lc}/bitcoin-streaming-pipeline" >> "$GITHUB_OUTPUT"
+          echo "tag=dev-latest" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Push Spark image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/streaming
+          file: ./src/streaming/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ github.sha }}
+            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ steps.ghcr.outputs.tag }}
+
+      - name: Push Producer image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/producer
+          file: ./src/producer/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ghcr.outputs.base }}/producer:${{ github.sha }}
+            ${{ steps.ghcr.outputs.base }}/producer:${{ steps.ghcr.outputs.tag }}
+
+      - name: Push Dashboard image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/dashboard
+          file: ./src/dashboard/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ghcr.outputs.base }}/dashboard:${{ github.sha }}
+            ${{ steps.ghcr.outputs.base }}/dashboard:${{ steps.ghcr.outputs.tag }}
+
+      - uses: databricks/setup-cli@main
+
+      - name: Deploy bundle to dev
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: databricks bundle deploy -t dev
+
+  deploy-manual:
+    if: github.event_name == 'workflow_dispatch'
+    needs: quality-build
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute GHCR image names
+        id: ghcr
+        shell: bash
+        run: |
+          owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "base=ghcr.io/${owner_lc}/bitcoin-streaming-pipeline" >> "$GITHUB_OUTPUT"
+          echo "tag=${{ inputs.target_env }}-latest" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Push Spark image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/streaming
+          file: ./src/streaming/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ github.sha }}
+            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ steps.ghcr.outputs.tag }}
+
+      - name: Push Producer image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/producer
+          file: ./src/producer/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ghcr.outputs.base }}/producer:${{ github.sha }}
+            ${{ steps.ghcr.outputs.base }}/producer:${{ steps.ghcr.outputs.tag }}
+
+      - name: Push Dashboard image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/dashboard
+          file: ./src/dashboard/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ghcr.outputs.base }}/dashboard:${{ github.sha }}
+            ${{ steps.ghcr.outputs.base }}/dashboard:${{ steps.ghcr.outputs.tag }}
+
+      - uses: databricks/setup-cli@main
+
+      - name: Deploy bundle to selected environment
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: databricks bundle deploy -t ${{ inputs.target_env }}
