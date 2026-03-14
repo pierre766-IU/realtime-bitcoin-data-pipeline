@@ -98,19 +98,38 @@ jobs:
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml config
 
   bundle-validate:
-    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && secrets.DATABRICKS_HOST != '' && secrets.DATABRICKS_TOKEN != '' }}
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
     needs: quality-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check Databricks credentials
+        id: creds
+        shell: bash
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          if [[ -n "$DATABRICKS_HOST" && -n "$DATABRICKS_TOKEN" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: databricks/setup-cli@main
+        if: steps.creds.outputs.available == 'true'
 
       - name: Validate Databricks bundle
+        if: steps.creds.outputs.available == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: databricks bundle validate -t dev
+
+      - name: Skip bundle validation when Databricks secrets are unavailable
+        if: steps.creds.outputs.available != 'true'
+        run: echo "Skipping Databricks bundle validation because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
 
   deploy-cloud-dev:
     if: github.event_name == 'push'
@@ -119,6 +138,19 @@ jobs:
     environment: dev
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check Databricks credentials
+        id: creds
+        shell: bash
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          if [[ -n "$DATABRICKS_HOST" && -n "$DATABRICKS_TOKEN" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute GHCR image names
         id: ghcr
@@ -169,12 +201,18 @@ jobs:
             ${{ steps.ghcr.outputs.base }}/dashboard:${{ steps.ghcr.outputs.tag }}
 
       - uses: databricks/setup-cli@main
+        if: steps.creds.outputs.available == 'true'
 
       - name: Deploy bundle to dev
+        if: steps.creds.outputs.available == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: databricks bundle deploy -t dev
+
+      - name: Skip Databricks deploy when credentials are unavailable
+        if: steps.creds.outputs.available != 'true'
+        run: echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
 
   deploy-manual:
     if: github.event_name == 'workflow_dispatch'
@@ -183,6 +221,19 @@ jobs:
     environment: ${{ inputs.target_env }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check Databricks credentials
+        id: creds
+        shell: bash
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          if [[ -n "$DATABRICKS_HOST" && -n "$DATABRICKS_TOKEN" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute GHCR image names
         id: ghcr
@@ -233,9 +284,15 @@ jobs:
             ${{ steps.ghcr.outputs.base }}/dashboard:${{ steps.ghcr.outputs.tag }}
 
       - uses: databricks/setup-cli@main
+        if: steps.creds.outputs.available == 'true'
 
       - name: Deploy bundle to selected environment
+        if: steps.creds.outputs.available == 'true'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: databricks bundle deploy -t ${{ inputs.target_env }}
+
+      - name: Skip Databricks deploy when credentials are unavailable
+        if: steps.creds.outputs.available != 'true'
+        run: echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."

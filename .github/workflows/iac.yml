@@ -103,7 +103,6 @@ jobs:
           echo "key_vault_name=$(terraform output -raw key_vault_name)" >> "$GITHUB_OUTPUT"
 
       - name: Sync GitHub environment secrets to Key Vault
-        if: ${{ success() && (secrets.DATABRICKS_HOST != '' || secrets.DATABRICKS_TOKEN != '' || secrets.KEYVAULT_SECRETS_JSON != '') }}
         uses: ./.github/actions/sync-keyvault-secrets
         with:
           key_vault_name: ${{ steps.tf_outputs.outputs.key_vault_name }}
@@ -157,7 +156,6 @@ jobs:
           echo "key_vault_name=$(terraform output -raw key_vault_name)" >> "$GITHUB_OUTPUT"
 
       - name: Sync GitHub environment secrets to Key Vault
-        if: ${{ success() && (secrets.DATABRICKS_HOST != '' || secrets.DATABRICKS_TOKEN != '' || secrets.KEYVAULT_SECRETS_JSON != '') }}
         uses: ./.github/actions/sync-keyvault-secrets
         with:
           key_vault_name: ${{ steps.tf_outputs.outputs.key_vault_name }}
