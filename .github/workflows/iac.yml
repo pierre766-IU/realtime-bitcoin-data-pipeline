@@ -143,7 +143,8 @@ jobs:
 
       - name: Skip GitHub-hosted apply when Azure deploy configuration is unavailable
         if: steps.deploy_config.outputs.available != 'true'
-        run: echo "Skipping GitHub-hosted Terraform apply for dev because required Azure or remote-state settings are missing: ${{ steps.deploy_config.outputs.missing }}"
+        run: |
+          echo "Skipping GitHub-hosted Terraform apply for dev because required Azure or remote-state settings are missing: ${{ steps.deploy_config.outputs.missing }}"
 
   apply-manual:
     if: github.event_name == 'workflow_dispatch'
@@ -231,4 +232,5 @@ jobs:
 
       - name: Skip GitHub-hosted apply when Azure deploy configuration is unavailable
         if: steps.deploy_config.outputs.available != 'true'
-        run: echo "Skipping GitHub-hosted Terraform apply for ${{ inputs.target_env }} because required Azure or remote-state settings are missing: ${{ steps.deploy_config.outputs.missing }}"
+        run: |
+          echo "Skipping GitHub-hosted Terraform apply for ${{ inputs.target_env }} because required Azure or remote-state settings are missing: ${{ steps.deploy_config.outputs.missing }}"
