@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   validate:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -67,48 +67,83 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check Azure deploy configuration
+        id: deploy_config
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TFSTATE_RESOURCE_GROUP: ${{ secrets.TFSTATE_RESOURCE_GROUP }}
+          TFSTATE_STORAGE_ACCOUNT: ${{ secrets.TFSTATE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER: ${{ secrets.TFSTATE_CONTAINER }}
+          TFSTATE_KEY: ${{ vars.TFSTATE_KEY }}
+        run: |
+          missing=()
+          [[ -n "$AZURE_CLIENT_ID" ]] || missing+=("AZURE_CLIENT_ID")
+          [[ -n "$AZURE_TENANT_ID" ]] || missing+=("AZURE_TENANT_ID")
+          [[ -n "$AZURE_SUBSCRIPTION_ID" ]] || missing+=("AZURE_SUBSCRIPTION_ID")
+          [[ -n "$TFSTATE_RESOURCE_GROUP" ]] || missing+=("TFSTATE_RESOURCE_GROUP")
+          [[ -n "$TFSTATE_STORAGE_ACCOUNT" ]] || missing+=("TFSTATE_STORAGE_ACCOUNT")
+          [[ -n "$TFSTATE_CONTAINER" ]] || missing+=("TFSTATE_CONTAINER")
+          [[ -n "$TFSTATE_KEY" ]] || missing+=("TFSTATE_KEY")
+
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "missing=${missing[*]}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: azure/login@v2
+        if: steps.deploy_config.outputs.available == 'true'
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - uses: hashicorp/setup-terraform@v3
+        if: steps.deploy_config.outputs.available == 'true'
         with:
           terraform_version: 1.8.5
 
       - name: Terraform init
+        if: steps.deploy_config.outputs.available == 'true'
         shell: bash
         run: |
-          if [[ -n "${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" ]]; then
-            terraform init -input=false \
-              -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
-              -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
-              -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
-              -backend-config="key=${{ vars.TFSTATE_KEY }}"
-          else
-            terraform init -input=false
-          fi
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TFSTATE_KEY }}"
 
       - name: Terraform plan
+        if: steps.deploy_config.outputs.available == 'true'
         run: terraform plan -input=false -var-file=terraform.tfvars -out=tfplan
 
       - name: Terraform apply
+        if: steps.deploy_config.outputs.available == 'true'
         run: terraform apply -input=false -auto-approve tfplan
 
       - name: Read Terraform outputs
         id: tf_outputs
+        if: steps.deploy_config.outputs.available == 'true'
         shell: bash
         run: |
           echo "key_vault_name=$(terraform output -raw key_vault_name)" >> "$GITHUB_OUTPUT"
 
       - name: Sync GitHub environment secrets to Key Vault
+        if: steps.deploy_config.outputs.available == 'true'
         uses: ./.github/actions/sync-keyvault-secrets
         with:
           key_vault_name: ${{ steps.tf_outputs.outputs.key_vault_name }}
           databricks_host_value: ${{ secrets.DATABRICKS_HOST }}
           databricks_token_value: ${{ secrets.DATABRICKS_TOKEN }}
           extra_secrets_json: ${{ secrets.KEYVAULT_SECRETS_JSON }}
+
+      - name: Skip GitHub-hosted apply when Azure deploy configuration is unavailable
+        if: steps.deploy_config.outputs.available != 'true'
+        run: echo "Skipping GitHub-hosted Terraform apply for dev because required Azure or remote-state settings are missing: ${{ steps.deploy_config.outputs.missing }}"
 
   apply-manual:
     if: github.event_name == 'workflow_dispatch'
@@ -120,45 +155,80 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check Azure deploy configuration
+        id: deploy_config
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TFSTATE_RESOURCE_GROUP: ${{ secrets.TFSTATE_RESOURCE_GROUP }}
+          TFSTATE_STORAGE_ACCOUNT: ${{ secrets.TFSTATE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER: ${{ secrets.TFSTATE_CONTAINER }}
+          TFSTATE_KEY: ${{ vars.TFSTATE_KEY }}
+        run: |
+          missing=()
+          [[ -n "$AZURE_CLIENT_ID" ]] || missing+=("AZURE_CLIENT_ID")
+          [[ -n "$AZURE_TENANT_ID" ]] || missing+=("AZURE_TENANT_ID")
+          [[ -n "$AZURE_SUBSCRIPTION_ID" ]] || missing+=("AZURE_SUBSCRIPTION_ID")
+          [[ -n "$TFSTATE_RESOURCE_GROUP" ]] || missing+=("TFSTATE_RESOURCE_GROUP")
+          [[ -n "$TFSTATE_STORAGE_ACCOUNT" ]] || missing+=("TFSTATE_STORAGE_ACCOUNT")
+          [[ -n "$TFSTATE_CONTAINER" ]] || missing+=("TFSTATE_CONTAINER")
+          [[ -n "$TFSTATE_KEY" ]] || missing+=("TFSTATE_KEY")
+
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "missing=${missing[*]}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: azure/login@v2
+        if: steps.deploy_config.outputs.available == 'true'
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - uses: hashicorp/setup-terraform@v3
+        if: steps.deploy_config.outputs.available == 'true'
         with:
           terraform_version: 1.8.5
 
       - name: Terraform init
+        if: steps.deploy_config.outputs.available == 'true'
         shell: bash
         run: |
-          if [[ -n "${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" ]]; then
-            terraform init -input=false \
-              -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
-              -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
-              -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
-              -backend-config="key=${{ vars.TFSTATE_KEY }}"
-          else
-            terraform init -input=false
-          fi
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TFSTATE_KEY }}"
 
       - name: Terraform plan
+        if: steps.deploy_config.outputs.available == 'true'
         run: terraform plan -input=false -var-file=terraform.tfvars -out=tfplan
 
       - name: Terraform apply
+        if: steps.deploy_config.outputs.available == 'true'
         run: terraform apply -input=false -auto-approve tfplan
 
       - name: Read Terraform outputs
         id: tf_outputs
+        if: steps.deploy_config.outputs.available == 'true'
         shell: bash
         run: |
           echo "key_vault_name=$(terraform output -raw key_vault_name)" >> "$GITHUB_OUTPUT"
 
       - name: Sync GitHub environment secrets to Key Vault
+        if: steps.deploy_config.outputs.available == 'true'
         uses: ./.github/actions/sync-keyvault-secrets
         with:
           key_vault_name: ${{ steps.tf_outputs.outputs.key_vault_name }}
           databricks_host_value: ${{ secrets.DATABRICKS_HOST }}
           databricks_token_value: ${{ secrets.DATABRICKS_TOKEN }}
           extra_secrets_json: ${{ secrets.KEYVAULT_SECRETS_JSON }}
+
+      - name: Skip GitHub-hosted apply when Azure deploy configuration is unavailable
+        if: steps.deploy_config.outputs.available != 'true'
+        run: echo "Skipping GitHub-hosted Terraform apply for ${{ inputs.target_env }} because required Azure or remote-state settings are missing: ${{ steps.deploy_config.outputs.missing }}"

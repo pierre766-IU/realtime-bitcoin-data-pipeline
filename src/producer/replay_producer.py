@@ -10,6 +10,7 @@ from typing import Iterator
 
 import requests
 from kafka import KafkaProducer
+from utils import build_producer_config
 
 # ========= DATASET URL =========
 # Default to the Release asset; can be overridden via env DATASET_URL
@@ -144,11 +145,13 @@ def main():
     logging.info("Using dataset: %s", DATASET_URL)
 
     producer = KafkaProducer(
-        bootstrap_servers=BOOTSTRAP,
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        linger_ms=50,
-        retries=3,
-        acks=1,
+        **build_producer_config(
+            bootstrap_servers=BOOTSTRAP,
+            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+            linger_ms=50,
+            retries=3,
+            acks=1,
+        )
     )
     logging.info("Kafka producer connected -> %s; topic=%s; speed=%.2f rows/s", BOOTSTRAP, TOPIC, SPEED)
 

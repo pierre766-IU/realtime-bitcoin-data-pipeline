@@ -2,12 +2,10 @@
 import os
 from pyspark.sql import SparkSession, functions as F
 
+from utils.delta_utils import build_path
+
 DELTA_BASE_PATH = os.getenv("DELTA_BASE_PATH", "/data/delta")
 CHECKPOINT_BASE_PATH = os.getenv("CHECKPOINT_BASE_PATH", f"{DELTA_BASE_PATH}/_checkpoints")
-
-
-def build_path(base: str, *parts: str) -> str:
-    return "/".join([base.rstrip("/")] + [p.strip("/") for p in parts])
 
 
 if __name__ == "__main__":

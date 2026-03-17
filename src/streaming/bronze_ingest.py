@@ -3,6 +3,8 @@ import os
 from pyspark.sql import SparkSession, functions as F
 
 from schemas.bronze_schema import BRONZE_SCHEMA
+from utils.delta_utils import build_path
+from utils.kafka_utils import apply_kafka_options, build_kafka_read_options
 
 TOPIC = os.getenv("TOPIC", "bitcoin-stream")
 BOOTSTRAP = os.getenv("BOOTSTRAP", "kafka:9092")
@@ -10,10 +12,6 @@ DELTA_BASE_PATH = os.getenv("DELTA_BASE_PATH", "/data/delta")
 CHECKPOINT_BASE_PATH = os.getenv("CHECKPOINT_BASE_PATH", f"{DELTA_BASE_PATH}/_checkpoints")
 
 schema = BRONZE_SCHEMA
-
-
-def build_path(base: str, *parts: str) -> str:
-    return "/".join([base.rstrip("/")] + [p.strip("/") for p in parts])
 
 
 def to_event_time(col):
@@ -29,14 +27,9 @@ if __name__ == "__main__":
     checkpoint_path = build_path(CHECKPOINT_BASE_PATH, "bronze")
 
     spark = SparkSession.builder.appName("bronze_ingest").getOrCreate()
+    kafka_options = build_kafka_read_options(TOPIC, BOOTSTRAP)
 
-    raw = (
-        spark.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", BOOTSTRAP)
-        .option("subscribe", TOPIC)
-        .option("startingOffsets", "earliest")
-        .load()
-    )
+    raw = apply_kafka_options(spark.readStream.format("kafka"), kafka_options).load()
 
     parsed = (
         raw.select(F.col("value").cast("string").alias("json_str"))

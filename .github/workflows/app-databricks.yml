@@ -35,7 +35,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   quality-build:
@@ -56,13 +55,8 @@ jobs:
       - name: Ruff lint
         run: ruff check src
 
-      - name: Run pytest if tests exist
-        run: |
-          if compgen -G "tests/test_*.py" > /dev/null; then
-            pytest -q
-          else
-            echo "No tests"
-          fi
+      - name: Run pytest
+        run: pytest -q
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -122,10 +116,35 @@ jobs:
 
       - name: Validate Databricks bundle
         if: steps.creds.outputs.available == 'true'
+        shell: bash
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: databricks bundle validate -t dev
+          EVENT_HUBS_BOOTSTRAP: ${{ vars.EVENT_HUBS_BOOTSTRAP }}
+          EVENT_HUBS_TOPIC: ${{ vars.EVENT_HUBS_TOPIC }}
+          DELTA_BASE_PATH: ${{ vars.DELTA_BASE_PATH }}
+          CHECKPOINT_BASE_PATH: ${{ vars.CHECKPOINT_BASE_PATH }}
+          KAFKA_SECURITY_PROTOCOL: ${{ vars.KAFKA_SECURITY_PROTOCOL }}
+          KAFKA_SASL_MECHANISM: ${{ vars.KAFKA_SASL_MECHANISM }}
+          KAFKA_SASL_USERNAME: ${{ vars.KAFKA_SASL_USERNAME }}
+          KAFKA_SASL_PASSWORD: ${{ secrets.KAFKA_SASL_PASSWORD }}
+          KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ${{ vars.KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM }}
+          KAFKA_STARTING_OFFSETS: ${{ vars.KAFKA_STARTING_OFFSETS }}
+          KAFKA_FAIL_ON_DATA_LOSS: ${{ vars.KAFKA_FAIL_ON_DATA_LOSS }}
+        run: |
+          databricks bundle validate -t dev \
+            --var="databricks_host=${DATABRICKS_HOST}" \
+            --var="event_hubs_bootstrap=${EVENT_HUBS_BOOTSTRAP:-my-namespace.servicebus.windows.net:9093}" \
+            --var="event_hubs_topic=${EVENT_HUBS_TOPIC:-bitcoin-stream}" \
+            --var="delta_base_path=${DELTA_BASE_PATH:-abfss://delta@mydatalake.dfs.core.windows.net/bitcoin}" \
+            --var="checkpoint_base_path=${CHECKPOINT_BASE_PATH:-abfss://checkpoints@mydatalake.dfs.core.windows.net/bitcoin}" \
+            --var="kafka_security_protocol=${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}" \
+            --var="kafka_sasl_mechanism=${KAFKA_SASL_MECHANISM:-PLAIN}" \
+            --var="kafka_sasl_username=${KAFKA_SASL_USERNAME:-\$ConnectionString}" \
+            --var="kafka_sasl_password=${KAFKA_SASL_PASSWORD:-}" \
+            --var="kafka_ssl_endpoint_identification_algorithm=${KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM:-https}" \
+            --var="kafka_starting_offsets=${KAFKA_STARTING_OFFSETS:-latest}" \
+            --var="kafka_fail_on_data_loss=${KAFKA_FAIL_ON_DATA_LOSS:-false}"
 
       - name: Skip bundle validation when Databricks secrets are unavailable
         if: steps.creds.outputs.available != 'true'
@@ -152,67 +171,70 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compute GHCR image names
-        id: ghcr
+      - name: Check Databricks runtime configuration
+        id: runtime
         shell: bash
+        env:
+          EVENT_HUBS_BOOTSTRAP: ${{ vars.EVENT_HUBS_BOOTSTRAP }}
+          DELTA_BASE_PATH: ${{ vars.DELTA_BASE_PATH }}
+          CHECKPOINT_BASE_PATH: ${{ vars.CHECKPOINT_BASE_PATH }}
+          KAFKA_SASL_PASSWORD: ${{ secrets.KAFKA_SASL_PASSWORD }}
         run: |
-          owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "base=ghcr.io/${owner_lc}/bitcoin-streaming-pipeline" >> "$GITHUB_OUTPUT"
-          echo "tag=dev-latest" >> "$GITHUB_OUTPUT"
+          missing=()
+          [[ -n "$EVENT_HUBS_BOOTSTRAP" ]] || missing+=("EVENT_HUBS_BOOTSTRAP")
+          [[ -n "$DELTA_BASE_PATH" ]] || missing+=("DELTA_BASE_PATH")
+          [[ -n "$CHECKPOINT_BASE_PATH" ]] || missing+=("CHECKPOINT_BASE_PATH")
+          [[ -n "$KAFKA_SASL_PASSWORD" ]] || missing+=("KAFKA_SASL_PASSWORD")
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Push Spark image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: ./src/streaming
-          file: ./src/streaming/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ github.sha }}
-            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ steps.ghcr.outputs.tag }}
-
-      - name: Push Producer image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: ./src/producer
-          file: ./src/producer/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.ghcr.outputs.base }}/producer:${{ github.sha }}
-            ${{ steps.ghcr.outputs.base }}/producer:${{ steps.ghcr.outputs.tag }}
-
-      - name: Push Dashboard image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: ./src/dashboard
-          file: ./src/dashboard/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.ghcr.outputs.base }}/dashboard:${{ github.sha }}
-            ${{ steps.ghcr.outputs.base }}/dashboard:${{ steps.ghcr.outputs.tag }}
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "missing=${missing[*]}" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: databricks/setup-cli@main
-        if: steps.creds.outputs.available == 'true'
+        if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available == 'true'
 
       - name: Deploy bundle to dev
-        if: steps.creds.outputs.available == 'true'
+        if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available == 'true'
+        shell: bash
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: databricks bundle deploy -t dev
+          EVENT_HUBS_BOOTSTRAP: ${{ vars.EVENT_HUBS_BOOTSTRAP }}
+          EVENT_HUBS_TOPIC: ${{ vars.EVENT_HUBS_TOPIC }}
+          DELTA_BASE_PATH: ${{ vars.DELTA_BASE_PATH }}
+          CHECKPOINT_BASE_PATH: ${{ vars.CHECKPOINT_BASE_PATH }}
+          KAFKA_SECURITY_PROTOCOL: ${{ vars.KAFKA_SECURITY_PROTOCOL }}
+          KAFKA_SASL_MECHANISM: ${{ vars.KAFKA_SASL_MECHANISM }}
+          KAFKA_SASL_USERNAME: ${{ vars.KAFKA_SASL_USERNAME }}
+          KAFKA_SASL_PASSWORD: ${{ secrets.KAFKA_SASL_PASSWORD }}
+          KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ${{ vars.KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM }}
+          KAFKA_STARTING_OFFSETS: ${{ vars.KAFKA_STARTING_OFFSETS }}
+          KAFKA_FAIL_ON_DATA_LOSS: ${{ vars.KAFKA_FAIL_ON_DATA_LOSS }}
+        run: |
+          databricks bundle deploy -t dev \
+            --var="databricks_host=${DATABRICKS_HOST}" \
+            --var="event_hubs_bootstrap=${EVENT_HUBS_BOOTSTRAP}" \
+            --var="event_hubs_topic=${EVENT_HUBS_TOPIC:-bitcoin-stream}" \
+            --var="delta_base_path=${DELTA_BASE_PATH}" \
+            --var="checkpoint_base_path=${CHECKPOINT_BASE_PATH}" \
+            --var="kafka_security_protocol=${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}" \
+            --var="kafka_sasl_mechanism=${KAFKA_SASL_MECHANISM:-PLAIN}" \
+            --var="kafka_sasl_username=${KAFKA_SASL_USERNAME:-\$ConnectionString}" \
+            --var="kafka_sasl_password=${KAFKA_SASL_PASSWORD}" \
+            --var="kafka_ssl_endpoint_identification_algorithm=${KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM:-https}" \
+            --var="kafka_starting_offsets=${KAFKA_STARTING_OFFSETS:-latest}" \
+            --var="kafka_fail_on_data_loss=${KAFKA_FAIL_ON_DATA_LOSS:-false}"
 
       - name: Skip Databricks deploy when credentials are unavailable
         if: steps.creds.outputs.available != 'true'
         run: echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
+
+      - name: Skip Databricks deploy when runtime config is unavailable
+        if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available != 'true'
+        run: echo "Skipping Databricks deploy because runtime inputs are missing: ${{ steps.runtime.outputs.missing }}"
 
   deploy-manual:
     if: github.event_name == 'workflow_dispatch'
@@ -235,64 +257,67 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compute GHCR image names
-        id: ghcr
+      - name: Check Databricks runtime configuration
+        id: runtime
         shell: bash
+        env:
+          EVENT_HUBS_BOOTSTRAP: ${{ vars.EVENT_HUBS_BOOTSTRAP }}
+          DELTA_BASE_PATH: ${{ vars.DELTA_BASE_PATH }}
+          CHECKPOINT_BASE_PATH: ${{ vars.CHECKPOINT_BASE_PATH }}
+          KAFKA_SASL_PASSWORD: ${{ secrets.KAFKA_SASL_PASSWORD }}
         run: |
-          owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "base=ghcr.io/${owner_lc}/bitcoin-streaming-pipeline" >> "$GITHUB_OUTPUT"
-          echo "tag=${{ inputs.target_env }}-latest" >> "$GITHUB_OUTPUT"
+          missing=()
+          [[ -n "$EVENT_HUBS_BOOTSTRAP" ]] || missing+=("EVENT_HUBS_BOOTSTRAP")
+          [[ -n "$DELTA_BASE_PATH" ]] || missing+=("DELTA_BASE_PATH")
+          [[ -n "$CHECKPOINT_BASE_PATH" ]] || missing+=("CHECKPOINT_BASE_PATH")
+          [[ -n "$KAFKA_SASL_PASSWORD" ]] || missing+=("KAFKA_SASL_PASSWORD")
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Push Spark image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: ./src/streaming
-          file: ./src/streaming/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ github.sha }}
-            ${{ steps.ghcr.outputs.base }}/spark-apps:${{ steps.ghcr.outputs.tag }}
-
-      - name: Push Producer image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: ./src/producer
-          file: ./src/producer/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.ghcr.outputs.base }}/producer:${{ github.sha }}
-            ${{ steps.ghcr.outputs.base }}/producer:${{ steps.ghcr.outputs.tag }}
-
-      - name: Push Dashboard image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: ./src/dashboard
-          file: ./src/dashboard/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.ghcr.outputs.base }}/dashboard:${{ github.sha }}
-            ${{ steps.ghcr.outputs.base }}/dashboard:${{ steps.ghcr.outputs.tag }}
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "missing=${missing[*]}" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: databricks/setup-cli@main
-        if: steps.creds.outputs.available == 'true'
+        if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available == 'true'
 
       - name: Deploy bundle to selected environment
-        if: steps.creds.outputs.available == 'true'
+        if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available == 'true'
+        shell: bash
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: databricks bundle deploy -t ${{ inputs.target_env }}
+          EVENT_HUBS_BOOTSTRAP: ${{ vars.EVENT_HUBS_BOOTSTRAP }}
+          EVENT_HUBS_TOPIC: ${{ vars.EVENT_HUBS_TOPIC }}
+          DELTA_BASE_PATH: ${{ vars.DELTA_BASE_PATH }}
+          CHECKPOINT_BASE_PATH: ${{ vars.CHECKPOINT_BASE_PATH }}
+          KAFKA_SECURITY_PROTOCOL: ${{ vars.KAFKA_SECURITY_PROTOCOL }}
+          KAFKA_SASL_MECHANISM: ${{ vars.KAFKA_SASL_MECHANISM }}
+          KAFKA_SASL_USERNAME: ${{ vars.KAFKA_SASL_USERNAME }}
+          KAFKA_SASL_PASSWORD: ${{ secrets.KAFKA_SASL_PASSWORD }}
+          KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ${{ vars.KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM }}
+          KAFKA_STARTING_OFFSETS: ${{ vars.KAFKA_STARTING_OFFSETS }}
+          KAFKA_FAIL_ON_DATA_LOSS: ${{ vars.KAFKA_FAIL_ON_DATA_LOSS }}
+        run: |
+          databricks bundle deploy -t ${{ inputs.target_env }} \
+            --var="databricks_host=${DATABRICKS_HOST}" \
+            --var="event_hubs_bootstrap=${EVENT_HUBS_BOOTSTRAP}" \
+            --var="event_hubs_topic=${EVENT_HUBS_TOPIC:-bitcoin-stream}" \
+            --var="delta_base_path=${DELTA_BASE_PATH}" \
+            --var="checkpoint_base_path=${CHECKPOINT_BASE_PATH}" \
+            --var="kafka_security_protocol=${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}" \
+            --var="kafka_sasl_mechanism=${KAFKA_SASL_MECHANISM:-PLAIN}" \
+            --var="kafka_sasl_username=${KAFKA_SASL_USERNAME:-\$ConnectionString}" \
+            --var="kafka_sasl_password=${KAFKA_SASL_PASSWORD}" \
+            --var="kafka_ssl_endpoint_identification_algorithm=${KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM:-https}" \
+            --var="kafka_starting_offsets=${KAFKA_STARTING_OFFSETS:-latest}" \
+            --var="kafka_fail_on_data_loss=${KAFKA_FAIL_ON_DATA_LOSS:-false}"
 
       - name: Skip Databricks deploy when credentials are unavailable
         if: steps.creds.outputs.available != 'true'
         run: echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
+
+      - name: Skip Databricks deploy when runtime config is unavailable
+        if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available != 'true'
+        run: echo "Skipping Databricks deploy because runtime inputs are missing: ${{ steps.runtime.outputs.missing }}"

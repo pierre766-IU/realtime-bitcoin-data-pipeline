@@ -17,6 +17,27 @@ variables:
   event_hubs_topic:
     description: Event Hubs topic (hub) name
     default: bitcoin-stream
+  kafka_security_protocol:
+    description: Kafka security protocol used by the bronze job
+    default: SASL_SSL
+  kafka_sasl_mechanism:
+    description: Kafka SASL mechanism used by the bronze job
+    default: PLAIN
+  kafka_sasl_username:
+    description: Kafka SASL username used by the bronze job
+    default: "$ConnectionString"
+  kafka_sasl_password:
+    description: Kafka SASL password or connection string used by the bronze job
+    default: ""
+  kafka_ssl_endpoint_identification_algorithm:
+    description: SSL endpoint identification algorithm for Kafka clients
+    default: https
+  kafka_starting_offsets:
+    description: Starting offsets for the bronze stream
+    default: latest
+  kafka_fail_on_data_loss:
+    description: Whether the bronze stream should fail when Kafka data is missing
+    default: "false"
   delta_base_path:
     description: ADLS path for Delta tables
     default: abfss://delta@mydatalake.dfs.core.windows.net/bitcoin
@@ -49,6 +70,13 @@ resources:
             spark_env_vars:
               BOOTSTRAP: ${var.event_hubs_bootstrap}
               TOPIC: ${var.event_hubs_topic}
+              KAFKA_SECURITY_PROTOCOL: ${var.kafka_security_protocol}
+              KAFKA_SASL_MECHANISM: ${var.kafka_sasl_mechanism}
+              KAFKA_SASL_USERNAME: ${var.kafka_sasl_username}
+              KAFKA_SASL_PASSWORD: ${var.kafka_sasl_password}
+              KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ${var.kafka_ssl_endpoint_identification_algorithm}
+              KAFKA_STARTING_OFFSETS: ${var.kafka_starting_offsets}
+              KAFKA_FAIL_ON_DATA_LOSS: ${var.kafka_fail_on_data_loss}
               DELTA_BASE_PATH: ${var.delta_base_path}
               CHECKPOINT_BASE_PATH: ${var.checkpoint_base_path}
       tags:
@@ -99,12 +127,6 @@ targets:
       host: ${var.databricks_host}
       root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
     variables:
-      databricks_host: https://adb-7405611424404070.10.azuredatabricks.net
-      event_hubs_bootstrap: btcpipelinedevehns.servicebus.windows.net:9093
-      event_hubs_topic: bitcoin-stream
-      delta_base_path: abfss://delta@btcpipelinedevdls.dfs.core.windows.net/bitcoin
-      checkpoint_base_path: abfss://checkpoints@btcpipelinedevdls.dfs.core.windows.net/bitcoin
-      spark_version: 13.3.x-scala2.12
       node_type_id: Standard_DS3_v2
       num_workers: "1"
 
@@ -114,12 +136,6 @@ targets:
       host: ${var.databricks_host}
       root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
     variables:
-      databricks_host: https://adb-REPLACE-STAGE.azuredatabricks.net
-      event_hubs_bootstrap: REPLACE-STAGE.servicebus.windows.net:9093
-      event_hubs_topic: bitcoin-stream
-      delta_base_path: abfss://delta@REPLACESTAGE.dfs.core.windows.net/bitcoin
-      checkpoint_base_path: abfss://checkpoints@REPLACESTAGE.dfs.core.windows.net/bitcoin
-      spark_version: 13.3.x-scala2.12
       node_type_id: Standard_DS4_v2
       num_workers: "2"
 
@@ -129,12 +145,6 @@ targets:
       host: ${var.databricks_host}
       root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
     variables:
-      databricks_host: https://adb-REPLACE-PROD.azuredatabricks.net
-      event_hubs_bootstrap: REPLACE-PROD.servicebus.windows.net:9093
-      event_hubs_topic: bitcoin-stream
-      delta_base_path: abfss://delta@REPLACEPROD.dfs.core.windows.net/bitcoin
-      checkpoint_base_path: abfss://checkpoints@REPLACEPROD.dfs.core.windows.net/bitcoin
-      spark_version: 13.3.x-scala2.12
       node_type_id: Standard_DS4_v2
       num_workers: "3"
 
