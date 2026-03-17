@@ -148,7 +148,8 @@ jobs:
 
       - name: Skip bundle validation when Databricks secrets are unavailable
         if: steps.creds.outputs.available != 'true'
-        run: echo "Skipping Databricks bundle validation because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
+        run: |
+          echo "Skipping Databricks bundle validation because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
 
   deploy-cloud-dev:
     if: github.event_name == 'push'
@@ -230,11 +231,13 @@ jobs:
 
       - name: Skip Databricks deploy when credentials are unavailable
         if: steps.creds.outputs.available != 'true'
-        run: echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
+        run: |
+          echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
 
       - name: Skip Databricks deploy when runtime config is unavailable
         if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available != 'true'
-        run: echo "Skipping Databricks deploy because runtime inputs are missing: ${{ steps.runtime.outputs.missing }}"
+        run: |
+          echo "Skipping Databricks deploy because runtime inputs are missing: ${{ steps.runtime.outputs.missing }}"
 
   deploy-manual:
     if: github.event_name == 'workflow_dispatch'
@@ -316,8 +319,10 @@ jobs:
 
       - name: Skip Databricks deploy when credentials are unavailable
         if: steps.creds.outputs.available != 'true'
-        run: echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
+        run: |
+          echo "Skipping Databricks deploy because DATABRICKS_HOST or DATABRICKS_TOKEN is not set."
 
       - name: Skip Databricks deploy when runtime config is unavailable
         if: steps.creds.outputs.available == 'true' && steps.runtime.outputs.available != 'true'
-        run: echo "Skipping Databricks deploy because runtime inputs are missing: ${{ steps.runtime.outputs.missing }}"
+        run: |
+          echo "Skipping Databricks deploy because runtime inputs are missing: ${{ steps.runtime.outputs.missing }}"
