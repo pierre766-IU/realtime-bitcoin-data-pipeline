@@ -59,7 +59,7 @@ This avoids conflicts with future CI/CD and Terraform-managed production variabl
 - [7. Production Baseline (Azure + Databricks)](#7-production-baseline-azure--databricks)
 - [7.1 Added Structure](#71-added-structure)
 - [7.2 Environment Promotion Model](#72-environment-promotion-model)
-- [7.3 Required GitHub Environment Configuration](#73-required-github-environment-configuration)
+- [7.3 GitHub Environment Configuration (Optional)](#73-github-environment-configuration-optional)
 - [7.4 Running in Cloud (Azure + Databricks)](#74-running-in-cloud-azure--databricks)
 - [7.5 Security and Compliance (Cloud)](#75-security-and-compliance-cloud)
 - [7.6 Availability](#76-availability)
@@ -77,7 +77,7 @@ This avoids conflicts with future CI/CD and Terraform-managed production variabl
 - The local stack is designed for development and demonstration, not high-availability production use.
 - Local Kafka runs in single-broker mode, so there is no replication or fault tolerance in the on-prem setup.
 - The replay producer depends on a fixed historical dataset URL and does not ingest from a live exchange feed.
-- Cloud deployment depends on user-managed Azure credentials, GitHub Environment secrets, and Databricks access, so it is not zero-touch for external evaluators.
+- Cloud deployment depends on user-managed Azure credentials, Databricks access, and environment-specific configuration, so it is not zero-touch for external evaluators.
 - The Databricks cloud path is functional as a deployment baseline, but it still requires environment-specific configuration and cost control in Azure.
 - Running the full cloud stack on a personal Azure account may consume free credits quickly if Databricks and related resources are left running.
 
@@ -259,19 +259,21 @@ This repository now includes a cloud production IaC and deployment scaffold alig
 - `infra/modules/*`: reusable Terraform modules (`eventhub`, `adls`, `keyvault`, `monitoring`, `databricks_workspace`)
 - `infra/envs/dev|stage|prod`: separate cloud Terraform roots for explicit environment promotion
 - `databricks.yml`: Databricks Asset Bundle for Bronze/Silver/Gold streaming jobs
-- `.github/workflows/iac.yml`: IaC lane (validate + deploy)
-- `.github/workflows/app-databricks.yml`: app lane (lint/build + Databricks bundle deploy)
+- `.github/workflows/iac.yml`: IaC lane (validate + optional GitHub-hosted deploy)
+- `.github/workflows/app-databricks.yml`: app lane (lint/build + optional GitHub-hosted Databricks bundle deploy)
 
 ### 7.2 Environment Promotion Model
 
-- `dev` (cloud): auto-apply for infra on push to `main` when `infra/**` changes; auto app deploy on push to `main` when `src/**` changes
-- `stage` and `prod` (cloud): manual deploy via workflow dispatch with GitHub Environment approvals
+- `dev` (cloud): recommended path is GitHub validation plus manual Terraform apply and manual Databricks bundle deploy from an operator machine
+- `stage` and `prod` (cloud): promote manually using the same local apply/deploy flow after validation
+- GitHub-hosted apply/deploy remains available later if the required credentials can be exposed to GitHub securely
 
-### 7.3 Required GitHub Environment Configuration
+### 7.3 GitHub Environment Configuration (Optional)
 
-Create cloud environments: `dev`, `stage`, `prod`.
+GitHub Environments are optional for a manual-deploy setup.
+Create `dev`, `stage`, and `prod` only if you want protected approvals, GitHub-hosted deployment, or GitHub-managed secret storage later.
 
-For each environment, add secrets:
+For GitHub-hosted Databricks bundle deployment, add these secrets:
 
 - `DATABRICKS_HOST`
 - `DATABRICKS_TOKEN`
@@ -287,7 +289,7 @@ Add the following only if you want GitHub-hosted Terraform apply for that enviro
 - `TFSTATE_STORAGE_ACCOUNT`
 - `TFSTATE_CONTAINER`
 
-For each environment, add variables:
+For GitHub-hosted Databricks bundle deployment or Key Vault secret-name overrides, add these variables:
 
 - `KEYVAULT_DATABRICKS_HOST_SECRET_NAME` (optional, defaults to `databricks-host`)
 - `KEYVAULT_DATABRICKS_TOKEN_SECRET_NAME` (optional, defaults to `databricks-token`)
@@ -306,22 +308,23 @@ Add `TFSTATE_KEY` (example: `bitcoin-streaming-pipeline/dev.tfstate`) only if yo
 
 ### 7.4 Running in Cloud (Azure + Databricks)
 
-Use this flow when you want to run the project through GitHub Actions in a real cloud environment.
+Use this flow when GitHub Actions are used for validation, but Terraform and Databricks deployments are run manually from your machine.
+This is the recommended path when Azure tenant credentials or Databricks deployment credentials are not practical to expose to GitHub.
 
 1. Prepare the target cloud environment.
 - Create or choose an Azure subscription.
 - Create the Terraform backend resource group, storage account, and blob container.
-- Create the GitHub Environment (`dev`, `stage`, or `prod`) and add the required secrets/variables listed above.
+- Make sure you have local Azure CLI access and local Databricks CLI/PAT access for the target environment.
+- Create GitHub Environments only if you want optional protected approvals or future GitHub-hosted deployment.
 
 2. Review environment-specific configuration.
 - Confirm the target Terraform values in `infra/envs/<env>/terraform.tfvars`.
-- Set the GitHub Environment runtime values used by `app-databricks.yml`.
-- Keep `backend.hcl` local only if you run Terraform manually outside GitHub Actions.
+- Keep `backend.hcl` local only.
+- Decide the exact Databricks workspace URL, Event Hubs bootstrap endpoint, Delta base path, checkpoint base path, and Kafka/Event Hubs secret you will pass to the bundle locally.
 
 3. Deploy infrastructure first.
-- If GitHub has Azure workload credentials for the target environment, push infra changes to `main` for `dev` or use `workflow_dispatch` for `stage` and `prod`.
-- If GitHub does not have Azure workload credentials, the IaC workflow will still run `fmt` and `validate`, then skip GitHub-hosted apply with a message instead of failing.
-- In that case, apply Terraform manually from your machine using Azure CLI authentication:
+- Push infra changes to `main` if you want the GitHub validation workflow to run.
+- Apply Terraform manually from your machine using Azure CLI authentication:
 
 ```bash
 az login
@@ -336,28 +339,59 @@ terraform apply -var-file=terraform.tfvars
 - Record `databricks_workspace_url`.
 - Record `event_hubs_bootstrap`.
 - Record `delta_base_path` and `checkpoint_base_path`.
-- Copy these values into the matching GitHub Environment variables for the target environment.
+- Keep these values available for the local Databricks bundle deploy.
 
 5. Deploy the application lane.
-- Trigger `app-databricks-cloud` for the same target environment.
-- The workflow lints and tests the repo, validates the bundle, and deploys the Databricks jobs for the target environment.
-- The bronze job reads its Kafka/Event Hubs security settings from GitHub Environment variables and the `KAFKA_SASL_PASSWORD` secret.
+- Optionally push app changes to `main` first so GitHub runs lint/tests/build validation.
+- Set your Databricks PAT locally, then validate and deploy the bundle from your machine:
+
+```bash
+export DATABRICKS_TOKEN="<databricks-pat>"
+
+databricks bundle validate -t dev \
+  --var="databricks_host=<workspace-url>" \
+  --var="event_hubs_bootstrap=<namespace>.servicebus.windows.net:9093" \
+  --var="event_hubs_topic=bitcoin-stream" \
+  --var="delta_base_path=abfss://delta@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="checkpoint_base_path=abfss://checkpoints@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="kafka_security_protocol=SASL_SSL" \
+  --var="kafka_sasl_mechanism=PLAIN" \
+  --var="kafka_sasl_username=\$ConnectionString" \
+  --var="kafka_sasl_password=<event-hubs-connection-string>" \
+  --var="kafka_ssl_endpoint_identification_algorithm=https" \
+  --var="kafka_starting_offsets=latest" \
+  --var="kafka_fail_on_data_loss=false"
+
+databricks bundle deploy -t dev \
+  --var="databricks_host=<workspace-url>" \
+  --var="event_hubs_bootstrap=<namespace>.servicebus.windows.net:9093" \
+  --var="event_hubs_topic=bitcoin-stream" \
+  --var="delta_base_path=abfss://delta@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="checkpoint_base_path=abfss://checkpoints@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="kafka_security_protocol=SASL_SSL" \
+  --var="kafka_sasl_mechanism=PLAIN" \
+  --var="kafka_sasl_username=\$ConnectionString" \
+  --var="kafka_sasl_password=<event-hubs-connection-string>" \
+  --var="kafka_ssl_endpoint_identification_algorithm=https" \
+  --var="kafka_starting_offsets=latest" \
+  --var="kafka_fail_on_data_loss=false"
+```
 
 6. Validate the cloud deployment.
-- Check that the IaC workflow either succeeded with apply or completed validation and reported that GitHub-hosted apply was skipped.
+- Check that the IaC workflow completed formatting/validation and that your local `terraform plan`/`apply` succeeded.
 - Verify that Databricks jobs for bronze, silver, and gold are present and healthy.
 - Verify that Event Hubs ingest is active and ADLS Delta/checkpoint paths are updating.
-- Confirm that Key Vault secret sync succeeded after infra apply.
+- Confirm that any required secrets are available in the runtime location you chose, such as local CLI/session state or Azure Key Vault.
 
 7. Promote to the next environment only after validation.
 - `dev` is the first integration environment.
-- `stage` and `prod` should be promoted manually with environment approvals and smoke checks.
+- `stage` and `prod` should be promoted manually with smoke checks and the same local Terraform plus Databricks bundle commands.
 
 ### 7.5 Security and Compliance (Cloud)
 
-- Secrets are not committed to the repository; sensitive values are expected to be stored in GitHub Environment secrets and synchronized into Azure Key Vault after infrastructure deployment.
+- Secrets are not committed to the repository; sensitive values are expected to stay outside version control and can be handled through local CLI/session state, GitHub Environment secrets, and/or Azure Key Vault depending on the deployment model.
 - The repository uses a no-credentials-in-source approach, with `.env.example` documenting required variables while real tokens, client IDs, and runtime secrets remain outside version control.
-- Access control is intended to follow least-privilege role assignments, including scoped GitHub Environment permissions and Azure RBAC assignments such as the Key Vault secret management role used by the deployment identity.
+- Access control is intended to follow least-privilege role assignments, including Azure RBAC and, when used, scoped GitHub Environment permissions for automation identities.
 - Environment separation is enforced through dedicated `dev`, `stage`, and `prod` configurations, isolated Terraform state keys, and environment-specific variables to reduce cross-environment drift and accidental credential reuse.
 
 ### 7.6 Availability
@@ -393,9 +427,9 @@ terraform apply -var-file=terraform.tfvars
 
 ### 7.11 Notes
 
-- Populate the Databricks runtime GitHub Environment variables and secrets before deployment.
+- Populate Databricks runtime values locally for manual bundle deploys, or mirror them into GitHub Environments only if you later enable GitHub-hosted deployment.
 - Keep `infra/envs/*/backend.hcl` local only (ignored by `.gitignore`).
-- Infra deploys now sync GitHub environment secrets into the provisioned Key Vault after Terraform apply, so runtime secret values stay out of Terraform state.
-- App deploys validate and deploy the Databricks bundle using the environment-specific Event Hubs and ADLS runtime settings.
+- If you later enable GitHub-hosted Terraform apply, infra deploys can sync GitHub Environment secrets into the provisioned Key Vault after Terraform apply so runtime secret values stay out of Terraform state.
+- App deploys can be run manually with `databricks bundle validate/deploy`, or optionally through GitHub Actions when environment-specific runtime settings are configured there.
 - Use private networking, managed identities, and RBAC policies as part of environment hardening before go-live.
 

@@ -5,13 +5,14 @@ This runbook documents the exact operational flow for demo evaluation.
 ## Scope
 
 - `local`: on-prem Docker Compose validation on developer machine.
-- `dev`, `stage`, `prod`: cloud environments deployed by GitHub workflows.
+- `dev`, `stage`, `prod`: cloud environments validated by GitHub workflows and deployed manually from an operator machine.
 
 ## Preconditions
 
-- GitHub Environments exist: `dev`, `stage`, `prod`.
-- Environment secrets/variables are configured as documented in `infra/README.md`.
-- Databricks bundle target placeholders are replaced in `databricks.yml`.
+- Azure CLI access is available for the target subscription/tenant.
+- Databricks CLI access is available for the target workspace.
+- Target Terraform values are prepared in `infra/envs/<env>/terraform.tfvars`.
+- Databricks bundle inputs are available from Terraform outputs or environment-specific notes.
 
 ## Step 1: Local Validation (on-prem)
 
@@ -46,51 +47,82 @@ git push origin <branch>
 ## Step 2: Promote to Cloud Dev
 
 1. Merge to `main`.
-2. GitHub Actions auto-runs:
-- `.github/workflows/iac.yml` -> `apply-cloud-dev` (infra)
-- `.github/workflows/app-databricks.yml` -> `deploy-cloud-dev` (images + app)
+2. GitHub Actions auto-run validation:
+- `.github/workflows/iac.yml` validates Terraform formatting and configuration.
+- `.github/workflows/app-databricks.yml` runs lint/tests/build validation.
 
-3. Validate in cloud `dev`:
-- Terraform apply succeeded.
-- Post-apply Key Vault secret sync succeeded.
-- Container images were pushed to GHCR.
-- Databricks bundle deployed.
+3. Apply infrastructure manually:
+
+```bash
+az login
+cd infra/envs/dev
+cp backend.hcl.example backend.hcl
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=terraform.tfvars
+terraform apply -var-file=terraform.tfvars
+```
+
+4. Capture Terraform outputs needed by the Databricks bundle:
+- `databricks_workspace_url`
+- `event_hubs_bootstrap`
+- `delta_base_path`
+- `checkpoint_base_path`
+
+5. Validate and deploy the Databricks bundle manually:
+
+```bash
+export DATABRICKS_TOKEN="<databricks-pat>"
+
+databricks bundle validate -t dev \
+  --var="databricks_host=<workspace-url>" \
+  --var="event_hubs_bootstrap=<namespace>.servicebus.windows.net:9093" \
+  --var="event_hubs_topic=bitcoin-stream" \
+  --var="delta_base_path=abfss://delta@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="checkpoint_base_path=abfss://checkpoints@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="kafka_security_protocol=SASL_SSL" \
+  --var="kafka_sasl_mechanism=PLAIN" \
+  --var="kafka_sasl_username=\$ConnectionString" \
+  --var="kafka_sasl_password=<event-hubs-connection-string>" \
+  --var="kafka_ssl_endpoint_identification_algorithm=https" \
+  --var="kafka_starting_offsets=latest" \
+  --var="kafka_fail_on_data_loss=false"
+
+databricks bundle deploy -t dev \
+  --var="databricks_host=<workspace-url>" \
+  --var="event_hubs_bootstrap=<namespace>.servicebus.windows.net:9093" \
+  --var="event_hubs_topic=bitcoin-stream" \
+  --var="delta_base_path=abfss://delta@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="checkpoint_base_path=abfss://checkpoints@<storage>.dfs.core.windows.net/bitcoin" \
+  --var="kafka_security_protocol=SASL_SSL" \
+  --var="kafka_sasl_mechanism=PLAIN" \
+  --var="kafka_sasl_username=\$ConnectionString" \
+  --var="kafka_sasl_password=<event-hubs-connection-string>" \
+  --var="kafka_ssl_endpoint_identification_algorithm=https" \
+  --var="kafka_starting_offsets=latest" \
+  --var="kafka_fail_on_data_loss=false"
+```
+
+6. Validate in cloud `dev`:
+- Local Terraform apply succeeded.
+- Databricks bundle deployed successfully.
 - Bronze/Silver/Gold jobs running.
 - Event Hubs ingest and ADLS checkpoint/data paths updating.
 
 ## Step 3: Promote to Cloud Stage (manual)
 
-1. Trigger workflow dispatch for IaC:
-- Workflow: `iac-terraform-cloud`
-- Input: `target_env = stage`
-
-2. Trigger workflow dispatch for app:
-- Workflow: `app-databricks-cloud`
-- Input: `target_env = stage`
-
-3. Approve required GitHub Environment gate for `stage`.
-4. Run stage validation checks:
+1. Run the same local Terraform flow in `infra/envs/stage`.
+2. Run `databricks bundle validate -t stage` and `databricks bundle deploy -t stage` with the stage-specific values.
+3. Run stage validation checks:
 - Job health and lag
-- Post-apply Key Vault secret sync succeeded.
-- Container images were pushed to GHCR with the `stage-latest` tag.
 - Data quality checks (sample windows)
 - Dashboard/consumer smoke checks
 
 ## Step 4: Promote to Cloud Prod (manual)
 
-1. Trigger workflow dispatch for IaC:
-- Workflow: `iac-terraform-cloud`
-- Input: `target_env = prod`
-
-2. Trigger workflow dispatch for app:
-- Workflow: `app-databricks-cloud`
-- Input: `target_env = prod`
-
-3. Approve required GitHub Environment gate for `prod`.
-4. Run production acceptance checks:
+1. Run the same local Terraform flow in `infra/envs/prod`.
+2. Run `databricks bundle validate -t prod` and `databricks bundle deploy -t prod` with the prod-specific values.
+3. Run production acceptance checks:
 - Streaming jobs stable over agreed observation period.
-- Post-apply Key Vault secret sync succeeded.
-- Container images were pushed to GHCR with the `prod-latest` tag.
 - Event Hubs throughput and consumer lag within target.
 - ADLS Delta/checkpoint paths healthy.
 - Monitoring/alerts active.
@@ -99,17 +131,16 @@ git push origin <branch>
 
 - PR merged to `main`.
 - Green workflow run links for:
-  - `iac-terraform-cloud` (dev/stage/prod)
-  - `app-databricks-cloud` (dev/stage/prod)
+  - `iac-terraform-cloud` validation
+  - `app-databricks-cloud` quality-build
 - Screenshots or links:
   - Databricks Jobs runs
-  - GHCR package tags
   - ADLS containers/paths
   - Event Hubs metrics
   - Dashboard output
 
 ## Rollback Guidance (short)
 
-- App rollback: redeploy previous bundle revision to target environment and republish the matching GHCR image tags if needed.
+- App rollback: redeploy the previous bundle revision to the target environment.
 - Infra rollback: apply previous Terraform revision from git tag/commit.
 - If prod is impacted, stop producer ingress first, then roll back app, then infra if required.

@@ -1,6 +1,7 @@
 # Terraform Infrastructure (Cloud: Dev/Stage/Prod)
 
 This folder contains the cloud production IaC baseline for the Databricks-first architecture.
+The recommended operating model is GitHub validation plus manual Terraform apply and manual Databricks bundle deploy from an operator machine.
 
 ## Scope Note
 
@@ -28,9 +29,10 @@ terraform plan -var-file=terraform.tfvars
 
 ## GitHub Environments and Secrets
 
-Create GitHub environments: `dev`, `stage`, `prod`.
+GitHub Environments are optional for a manual-deploy setup.
+Create `dev`, `stage`, and `prod` only if you want protected approvals, GitHub-hosted deployment, or GitHub-managed secret storage later.
 
-Set these environment-scoped secrets for each environment:
+Set these environment-scoped secrets only if you want GitHub-hosted Databricks bundle deployment:
 
 - `DATABRICKS_HOST`
 - `DATABRICKS_TOKEN`
@@ -46,7 +48,7 @@ Set the following only if you want GitHub-hosted Terraform apply:
 - `TFSTATE_STORAGE_ACCOUNT`
 - `TFSTATE_CONTAINER`
 
-Set these environment-scoped variables for each environment:
+Set these environment-scoped variables only if you want GitHub-hosted Databricks bundle deployment or Key Vault secret-name overrides:
 
 - `KEYVAULT_DATABRICKS_HOST_SECRET_NAME` (optional, defaults to `databricks-host`)
 - `KEYVAULT_DATABRICKS_TOKEN_SECRET_NAME` (optional, defaults to `databricks-token`)
@@ -66,15 +68,16 @@ Set `TFSTATE_KEY` (example: `bitcoin-streaming-pipeline/dev.tfstate`) only if yo
 ## Secret Population Model
 
 - Terraform creates the Key Vault and grants the deployment principal `Key Vault Secrets Officer` on that vault.
-- After each successful cloud apply, `.github/workflows/iac.yml` reads the `key_vault_name` Terraform output and writes GitHub environment secrets into Key Vault with Azure CLI.
+- If you use GitHub-hosted Terraform apply, `.github/workflows/iac.yml` reads the `key_vault_name` Terraform output and writes GitHub environment secrets into Key Vault with Azure CLI after apply.
 - This avoids storing runtime secret values in Terraform state.
 - Secrets in `KEYVAULT_SECRETS_JSON` must use valid Azure Key Vault secret names.
 
-## GitHub Validate + Local Apply Fallback
+## GitHub Validate + Local Apply
 
-- If GitHub has the Azure workload credentials and backend settings listed above, `.github/workflows/iac.yml` can run `terraform init`, `plan`, and `apply` on GitHub-hosted runners.
+- `.github/workflows/iac.yml` always provides a validation lane for formatting and Terraform validation.
+- If GitHub has the Azure workload credentials and backend settings listed above, the same workflow can also run `terraform init`, `plan`, and `apply` on GitHub-hosted runners.
 - If those settings are not present, `.github/workflows/iac.yml` still runs Terraform formatting and validation, then skips GitHub-hosted apply instead of failing.
-- In that case, use local Azure CLI authentication for apply:
+- The recommended default is to use local Azure CLI authentication for apply:
 
 ```bash
 az login
@@ -88,14 +91,14 @@ terraform apply -var-file=terraform.tfvars
 ## Databricks Runtime Configuration Model
 
 - Terraform outputs expose the values needed by the Databricks bundle: `event_hubs_bootstrap`, `delta_base_path`, and `checkpoint_base_path`.
-- Copy those outputs into GitHub Environment variables with the same names before running `.github/workflows/app-databricks.yml`.
-- Store the Event Hubs Kafka connection string or SASL password in the `KAFKA_SASL_PASSWORD` GitHub Environment secret.
+- For manual deployment, pass those values directly to `databricks bundle validate/deploy` from your local machine.
+- Copy those outputs into GitHub Environment variables and store `KAFKA_SASL_PASSWORD` in a GitHub Environment secret only if you later enable GitHub-hosted app deployment.
 
 ## Promotion Model
 
-- Push to `main` with infra changes validates `dev` and auto-applies only when GitHub-hosted Azure credentials are configured.
-- Push to `main` with app changes validates and deploys the Databricks bundle to `dev`.
-- `stage` and `prod` applies are manual via workflow dispatch and should be guarded by required approvals in GitHub Environments.
+- Push to `main` with infra changes or app changes to run GitHub validation workflows.
+- Promote `dev`, `stage`, and `prod` manually with local Terraform apply and local `databricks bundle deploy -t <env>`.
+- GitHub-hosted apply/deploy remains an optional future automation path when credentials are available.
 
 ## Naming Defaults and Guardrails
 
