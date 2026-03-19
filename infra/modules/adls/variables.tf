@@ -35,6 +35,11 @@ variable "log_analytics_workspace_id" {
   default = null
 }
 
+variable "enable_diagnostics" {
+  type    = bool
+  default = false
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

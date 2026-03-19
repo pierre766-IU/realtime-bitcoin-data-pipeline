@@ -3,6 +3,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+DEFAULT_EVENT_HUBS_SASL_USERNAME = "$ConnectionString"
 
 
 def _resolve_env(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
@@ -37,6 +38,8 @@ def build_producer_config(
 
     for option_name, env_name in option_map.items():
         value = env_map.get(env_name)
+        if option_name == "sasl_plain_username" and not value and env_map.get("KAFKA_SASL_PASSWORD"):
+            value = DEFAULT_EVENT_HUBS_SASL_USERNAME
         if value:
             config[option_name] = value
 

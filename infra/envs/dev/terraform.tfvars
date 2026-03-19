@@ -8,7 +8,7 @@ eventhub_capacity          = 1
 eventhub_partition_count   = 4
 eventhub_message_retention = 1
 
-public_network_access_enabled = false
+public_network_access_enabled = true
 alert_email_receivers         = []
 
 tags = {

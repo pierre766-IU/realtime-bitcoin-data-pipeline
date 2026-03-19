@@ -3,7 +3,7 @@ import os
 from pyspark.sql import SparkSession, functions as F
 
 from schemas.bronze_schema import BRONZE_SCHEMA
-from utils.delta_utils import build_path
+from utils.delta_utils import build_path, configure_abfs_shared_key
 from utils.kafka_utils import apply_kafka_options, build_kafka_read_options
 
 TOPIC = os.getenv("TOPIC", "bitcoin-stream")
@@ -27,6 +27,7 @@ if __name__ == "__main__":
     checkpoint_path = build_path(CHECKPOINT_BASE_PATH, "bronze")
 
     spark = SparkSession.builder.appName("bronze_ingest").getOrCreate()
+    configure_abfs_shared_key(spark)
     kafka_options = build_kafka_read_options(TOPIC, BOOTSTRAP)
 
     raw = apply_kafka_options(spark.readStream.format("kafka"), kafka_options).load()

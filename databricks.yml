@@ -4,13 +4,10 @@ bundle:
 sync:
   include:
     - src/**
-
-auth:
-  type: pat
+  exclude:
+    - notebooks/**
 
 variables:
-  databricks_host:
-    description: Databricks workspace URL, for example https://adb-1234567890123456.7.azuredatabricks.net
   event_hubs_bootstrap:
     description: Event Hubs Kafka bootstrap endpoint <namespace>.servicebus.windows.net:9093
     default: my-namespace.servicebus.windows.net:9093
@@ -44,12 +41,18 @@ variables:
   checkpoint_base_path:
     description: ADLS path for Structured Streaming checkpoints
     default: abfss://checkpoints@mydatalake.dfs.core.windows.net/bitcoin
+  storage_account_name:
+    description: ADLS storage account name used by the streaming jobs
+    default: mydatalake
+  storage_account_key:
+    description: ADLS storage account shared key used by the streaming jobs
+    default: ""
   spark_version:
     description: Databricks runtime
     default: 13.3.x-scala2.12
   node_type_id:
     description: Databricks worker node size
-    default: Standard_DS3_v2
+    default: Standard_D4ds_v4
   num_workers:
     description: Number of workers for each streaming job cluster
     default: "1"
@@ -79,6 +82,8 @@ resources:
               KAFKA_FAIL_ON_DATA_LOSS: ${var.kafka_fail_on_data_loss}
               DELTA_BASE_PATH: ${var.delta_base_path}
               CHECKPOINT_BASE_PATH: ${var.checkpoint_base_path}
+              STORAGE_ACCOUNT_NAME: ${var.storage_account_name}
+              STORAGE_ACCOUNT_KEY: ${var.storage_account_key}
       tags:
         layer: bronze
         system: bitcoin-streaming-pipeline
@@ -97,6 +102,8 @@ resources:
             spark_env_vars:
               DELTA_BASE_PATH: ${var.delta_base_path}
               CHECKPOINT_BASE_PATH: ${var.checkpoint_base_path}
+              STORAGE_ACCOUNT_NAME: ${var.storage_account_name}
+              STORAGE_ACCOUNT_KEY: ${var.storage_account_key}
       tags:
         layer: silver
         system: bitcoin-streaming-pipeline
@@ -115,6 +122,8 @@ resources:
             spark_env_vars:
               DELTA_BASE_PATH: ${var.delta_base_path}
               CHECKPOINT_BASE_PATH: ${var.checkpoint_base_path}
+              STORAGE_ACCOUNT_NAME: ${var.storage_account_name}
+              STORAGE_ACCOUNT_KEY: ${var.storage_account_key}
       tags:
         layer: gold
         system: bitcoin-streaming-pipeline
@@ -124,27 +133,27 @@ targets:
     default: true
     mode: development
     workspace:
-      host: ${var.databricks_host}
-      root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
+      profile: dev
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
     variables:
-      node_type_id: Standard_DS3_v2
+      node_type_id: Standard_D2ads_v6
       num_workers: "1"
 
   stage:
     mode: production
     workspace:
-      host: ${var.databricks_host}
+      profile: stage
       root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
     variables:
-      node_type_id: Standard_DS4_v2
+      node_type_id: Standard_D8ds_v4
       num_workers: "2"
 
   prod:
     mode: production
     workspace:
-      host: ${var.databricks_host}
+      profile: prod
       root_path: /Workspace/Shared/${bundle.name}/${bundle.target}
     variables:
-      node_type_id: Standard_DS4_v2
+      node_type_id: Standard_D8ds_v4
       num_workers: "3"
 

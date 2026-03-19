@@ -38,6 +38,17 @@ def test_build_sasl_jaas_config_from_username_and_password():
     assert 'password="Endpoint=sb://namespace/;SharedAccessKeyName=\\"Root\\""' in config
 
 
+def test_build_sasl_jaas_config_defaults_event_hubs_username_when_missing():
+    config = build_sasl_jaas_config(
+        {
+            "KAFKA_SASL_PASSWORD": "Endpoint=sb://namespace/;SharedAccessKey=secret",
+        }
+    )
+
+    assert 'username="$ConnectionString"' in config
+    assert 'password="Endpoint=sb://namespace/;SharedAccessKey=secret"' in config
+
+
 def test_build_kafka_read_options_supports_plaintext_defaults():
     options = build_kafka_read_options("bitcoin-stream", "kafka:9092", {})
 
@@ -72,7 +83,7 @@ def test_build_kafka_read_options_supports_event_hubs_settings():
     assert options["failOnDataLoss"] == "true"
     assert options["maxOffsetsPerTrigger"] == "500"
     assert options["kafka.sasl.jaas.config"].startswith(
-        "org.apache.kafka.common.security.plain.PlainLoginModule required"
+        "kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule required"
     )
 
 

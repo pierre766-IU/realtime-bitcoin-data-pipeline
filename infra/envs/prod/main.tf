@@ -41,6 +41,7 @@ module "adls" {
   containers                    = ["delta", "checkpoints", "bronze-deadletter"]
   public_network_access_enabled = var.public_network_access_enabled
   log_analytics_workspace_id    = module.monitoring.log_analytics_workspace_id
+  enable_diagnostics            = true
   tags                          = local.common_tags
 }
 
@@ -57,6 +58,7 @@ module "eventhub" {
   consumer_groups               = ["bronze-job", "silver-job", "gold-job"]
   public_network_access_enabled = var.public_network_access_enabled
   log_analytics_workspace_id    = module.monitoring.log_analytics_workspace_id
+  enable_diagnostics            = true
   tags                          = local.common_tags
 }
 

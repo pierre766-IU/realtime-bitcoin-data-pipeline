@@ -7,7 +7,7 @@ resource "azurerm_storage_account" "this" {
   account_kind                    = "StorageV2"
   is_hns_enabled                  = true
   min_tls_version                 = "TLS1_2"
-  shared_access_key_enabled       = false
+  shared_access_key_enabled       = true
   public_network_access_enabled   = var.public_network_access_enabled
   allow_nested_items_to_be_public = false
   tags                            = var.tags
@@ -16,12 +16,12 @@ resource "azurerm_storage_account" "this" {
 resource "azurerm_storage_container" "this" {
   for_each              = toset(var.containers)
   name                  = each.value
-  storage_account_name  = azurerm_storage_account.this.name
+  storage_account_id    = azurerm_storage_account.this.id
   container_access_type = "private"
 }
 
 resource "azurerm_monitor_diagnostic_setting" "storage" {
-  count                      = var.log_analytics_workspace_id == null ? 0 : 1
+  count                      = var.enable_diagnostics ? 1 : 0
   name                       = "diag-${var.storage_account_name}"
   target_resource_id         = azurerm_storage_account.this.id
   log_analytics_workspace_id = var.log_analytics_workspace_id

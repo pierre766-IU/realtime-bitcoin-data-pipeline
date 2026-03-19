@@ -26,7 +26,7 @@ resource "azurerm_eventhub_consumer_group" "this" {
 }
 
 resource "azurerm_monitor_diagnostic_setting" "eventhub_namespace" {
-  count                      = var.log_analytics_workspace_id == null ? 0 : 1
+  count                      = var.enable_diagnostics ? 1 : 0
   name                       = "diag-${var.namespace_name}"
   target_resource_id         = azurerm_eventhub_namespace.this.id
   log_analytics_workspace_id = var.log_analytics_workspace_id

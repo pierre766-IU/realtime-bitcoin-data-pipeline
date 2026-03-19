@@ -3,6 +3,8 @@ from collections.abc import Mapping
 
 DEFAULT_STARTING_OFFSETS = "earliest"
 DEFAULT_FAIL_ON_DATA_LOSS = "false"
+DEFAULT_EVENT_HUBS_SASL_USERNAME = "$ConnectionString"
+SPARK_KAFKA_PLAIN_LOGIN_MODULE = "kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule"
 
 
 def _resolve_env(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
@@ -19,13 +21,15 @@ def build_sasl_jaas_config(env: Mapping[str, str] | None = None) -> str | None:
     if explicit:
         return explicit
 
-    username = env_map.get("KAFKA_SASL_USERNAME")
+    username = env_map.get("KAFKA_SASL_USERNAME", "").strip()
     password = env_map.get("KAFKA_SASL_PASSWORD")
+    if password and not username:
+        username = DEFAULT_EVENT_HUBS_SASL_USERNAME
     if not username or not password:
         return None
 
     return (
-        "org.apache.kafka.common.security.plain.PlainLoginModule required "
+        f"{SPARK_KAFKA_PLAIN_LOGIN_MODULE} required "
         f'username="{escape_jaas_value(username)}" '
         f'password="{escape_jaas_value(password)}";'
     )

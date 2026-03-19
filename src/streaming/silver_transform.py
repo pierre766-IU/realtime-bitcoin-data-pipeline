@@ -2,7 +2,7 @@
 import os
 from pyspark.sql import SparkSession, functions as F
 
-from utils.delta_utils import build_path
+from utils.delta_utils import build_path, configure_abfs_shared_key
 
 DELTA_BASE_PATH = os.getenv("DELTA_BASE_PATH", "/data/delta")
 CHECKPOINT_BASE_PATH = os.getenv("CHECKPOINT_BASE_PATH", f"{DELTA_BASE_PATH}/_checkpoints")
@@ -14,6 +14,7 @@ if __name__ == "__main__":
     checkpoint_path = build_path(CHECKPOINT_BASE_PATH, "silver")
 
     spark = SparkSession.builder.appName("silver_transform").getOrCreate()
+    configure_abfs_shared_key(spark)
 
     bronze = spark.readStream.format("delta").load(bronze_path)
 
